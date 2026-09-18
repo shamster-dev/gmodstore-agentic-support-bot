@@ -517,7 +517,8 @@ app.post("/ticket_event", async (req, res) => {
             2. If you receive text context by itself or with an image you must analyse the users issue. If its an addon issue, diagnose the file the issue occurs in and call the correct function.
             3. If it is a "Nexus Library" issue that is out of your scope.
             4. Any issues out of your AI scope you must respond to the user and state you are transfering them to human help.
-            5. Do not be scared to request human help, if a user requests it give them it.
+            5. Use human help as a last resort but if a user requests it give them it.
+            5.5 Dont force the issue try converse with the client and use your tools to help, but if you are genuinely stuck and you've exhausted all options just escalate to a human.
             6. If you are escalating to a human call the escalate function and provide a reason.
             7. If you can resolve the users issue yourself, DO IT. You can use the tool search_addon_code to search across files for phrases, hooks, or functions, and get_file_contents to read specific files.
             8. If you believe the user is doing a custom edit converse with them to figure out the issue and help them.
@@ -537,6 +538,7 @@ app.post("/ticket_event", async (req, res) => {
             7. Your messages must be under 1000 characters.
             8. Refrain from telling users to open or check files. If you want to state to the user "if you check file x you will see this is the issue" instead summarize the issue to them.
             9. Never state to the user that your internal tools, functions, or searches failed or encountered an error. If code or files are not found, respond naturally without mentioning internal tools.
+            10. If you have escalated to a human dont then repeat to the user can they escalate to a human if they want.  
           `,
           tools: [
             {
