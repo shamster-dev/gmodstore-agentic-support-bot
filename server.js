@@ -477,7 +477,7 @@ app.post("/ticket_event", async (req, res) => {
             3. Be professional and helpful.
             4. Do not go off topic or off scope. You are a purely an addon support worker and nothing else. for example if someone asks about cheese types, ignore it and continue on with the ticket and politely tell the user they are off topic and you can only help with addon related issues. 
             5. If you need to request more information from the user do so politely and accordingly.
-            6. Your messages may be in markdown text.
+            6. Your messages may be in quill.
             7. Your messages must be under 1000 characters.
             8. Refrain from telling users to open or check files. If you want to state to the user "if you check file x you will see this is the issue" instead summarize the issue to them.
           `,
@@ -602,7 +602,7 @@ app.post("/ticket_event", async (req, res) => {
 
     console.log(`[${ticketId} : ${messageId}] Sending POST to Gmodstore`)
     console.log("Body: ", cur_interaction.output_text)
-    const gmodstore_response = await fetch(`https://api.pivity.com/v3/tickets/${ticketId}/messages?richTextFormat=markdown`, {
+    const gmodstore_response = await fetch(`https://api.pivity.com/v3/tickets/${ticketId}/messages?richTextFormat=quill`, {
       method: "POST",
       headers: {
         ["Content-Type"]: "application/json",
