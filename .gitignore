@@ -1,0 +1,10 @@
+# Dependencies
+node_modules/
+
+# Environment secrets — never commit this
+.env
+
+# Addon source files
+gmod_addons/*
+!gmod_addons/\[gmodstore addon id\]/
+!gmod_addons/\[gmodstore addon id\]/**
