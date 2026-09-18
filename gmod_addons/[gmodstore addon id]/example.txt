@@ -1,0 +1,4 @@
+To add your addon just upload the straight folder into gmod_addons, then change the id
+it should read
+
+[gmod_addons]/[addon-id]/lua
