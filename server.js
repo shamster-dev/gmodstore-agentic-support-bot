@@ -134,6 +134,160 @@ function getAddonFileList(addonName) {
     });
 }
 
+function isOriginDefinition(trimmedLine, cleanQuery) {
+  const escaped = cleanQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  if (new RegExp(`^(?:local\\s+)?function\\s+[a-zA-Z0-9_.:]*${escaped}\\s*\\(`, "i").test(trimmedLine)) {
+    return true;
+  }
+  if (new RegExp(`[a-zA-Z0-9_.:]*${escaped}\\s*=\\s*function\\s*\\(`, "i").test(trimmedLine)) {
+    return true;
+  }
+  if (new RegExp(`^hook\\.Add\\s*\\([^)]*${escaped}`, "i").test(trimmedLine)) {
+    return true;
+  }
+  if (new RegExp(`^net\\.Receive\\s*\\(\\s*["'][^"']*${escaped}`, "i").test(trimmedLine)) {
+    return true;
+  }
+  if (new RegExp(`^concommand\\.Add\\s*\\(\\s*["'][^"']*${escaped}`, "i").test(trimmedLine)) {
+    return true;
+  }
+
+  return false;
+}
+
+function extractFunctionBody(lines, startIdx, maxLines = 60) {
+  let depth = 0;
+  const extracted = [];
+  for (let k = startIdx; k < Math.min(lines.length, startIdx + maxLines); k++) {
+    const curLine = lines[k];
+    extracted.push(curLine);
+
+    const opens = (curLine.match(/\b(function|then|do)\b/g) || []).length;
+    const closes = (curLine.match(/\bend\b/g) || []).length;
+    depth += opens - closes;
+
+    if (depth <= 0 && k > startIdx) {
+      return extracted.join("\n");
+    }
+  }
+  return extracted.join("\n");
+}
+
+function searchAddonFiles(addonName, query, maxResults = 10) {
+  if (!query || typeof query !== "string" || query.trim().length < 2) {
+    return { error: "Search query must be at least 2 characters long." };
+  }
+
+  const baseDir = path.resolve(__dirname, "gmod_addons", addonName);
+  if (!fs.existsSync(baseDir)) {
+    return { error: `Addon directory '${addonName}' does not exist.` };
+  }
+
+  const files = getAddonFileList(addonName);
+  const cleanQuery = query.trim().toLowerCase();
+
+  const definitions = [];
+  const references = [];
+
+  for (const relPath of files) {
+    const ext = path.extname(relPath).toLowerCase();
+    if (ext && ![".lua", ".txt", ".json"].includes(ext)) {
+      continue;
+    }
+
+    const fullPath = path.resolve(baseDir, relPath);
+    if (!fullPath.startsWith(baseDir)) continue;
+
+    let content;
+    try {
+      const stats = fs.statSync(fullPath);
+      if (stats.size > 1024 * 1024) continue; // Skip files > 1MB
+
+      content = fs.readFileSync(fullPath, "utf8");
+    } catch {
+      continue;
+    }
+
+    if (!content.toLowerCase().includes(cleanQuery)) {
+      continue;
+    }
+
+    const lines = content.split(/\r?\n/);
+    let refsInFile = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.toLowerCase().includes(cleanQuery)) continue;
+
+      const trimmedLine = line.trim();
+      const isDef = isOriginDefinition(trimmedLine, cleanQuery);
+
+      if (isDef) {
+        const funcCode = extractFunctionBody(lines, i, 60);
+
+        definitions.push({
+          file: relPath,
+          line_number: i + 1,
+          is_definition: true,
+          definition_header: trimmedLine,
+          function_code: funcCode,
+        });
+      } else {
+        // Reference or match inside other code
+        if (refsInFile >= 2) continue;
+        refsInFile++;
+
+        let enclosingHeader = null;
+        let funcStartIdx = -1;
+
+        // Search backwards up to 60 lines for enclosing function
+        for (let j = i; j >= Math.max(0, i - 60); j--) {
+          const prevLine = lines[j].trim();
+          const isFunc =
+            prevLine.match(/^(?:local\s+)?function\s+([a-zA-Z0-9_.:]+)\s*\(.*?\)/) ||
+            prevLine.match(/^(?:local\s+)?([a-zA-Z0-9_.:]+)\s*=\s*function\s*\(.*?\)/) ||
+            prevLine.match(/^(?:hook\.Add|net\.Receive|concommand\.Add|timer\.Create)\s*\(\s*(["'][^"']+["']|[a-zA-Z0-9_.:]+)/);
+
+          if (isFunc) {
+            enclosingHeader = prevLine;
+            funcStartIdx = j;
+            break;
+          }
+        }
+
+        let functionCode = null;
+        if (funcStartIdx !== -1) {
+          functionCode = extractFunctionBody(lines, funcStartIdx, 45);
+        }
+
+        const startCtx = Math.max(0, i - 2);
+        const endCtx = Math.min(lines.length - 1, i + 2);
+        const snippet = lines.slice(startCtx, endCtx + 1).map((l, idx) => `${startCtx + idx + 1}: ${l}`).join("\n");
+
+        references.push({
+          file: relPath,
+          line_number: i + 1,
+          is_definition: false,
+          enclosing_scope: enclosingHeader || "Global / File Scope",
+          function_code: functionCode || undefined,
+          context_snippet: !functionCode ? snippet : undefined,
+        });
+      }
+    }
+  }
+
+  // definitions first then references
+  const combined = [...definitions, ...references].slice(0, maxResults);
+
+  return {
+    query,
+    total_definitions: definitions.length,
+    total_matches: combined.length,
+    results: combined.length > 0 ? combined : "No matches found.",
+  };
+}
+
 async function HasEscalatedToHuman(ticketId, messageId) {
   try {
     return (await redis.get(`HasEscalatedToHuman:${ticketId}`)) == "1"
@@ -309,7 +463,7 @@ app.post("/ticket_event", async (req, res) => {
             4. Any issues out of your AI scope you must respond to the user and state you are transfering them to human help.
             5. Do not be scared to request human help, if a user requests it give them it.
             6. If you are escalating to a human call the escalate function and provide a reason.
-            7. If you can resolve the users issue yourself, DO IT. This may include using the tool get_file_contents.
+            7. If you can resolve the users issue yourself, DO IT. You can use the tool search_addon_code to search across files for phrases, hooks, or functions, and get_file_contents to read specific files.
             8. If you believe the user is doing a custom edit converse with them to figure out the issue and help them.
             9. You may go off scope if it includes the addon e.g. custom edits.
             10. You may ask the user for screenshots.
@@ -341,6 +495,21 @@ app.post("/ticket_event", async (req, res) => {
                   },
                 },
                 required: ["filepath"],
+              }
+            },
+            {
+              type: "function",
+              name: "search_addon_code",
+              description: "Search for a keyword, phrase, hook, function name, or error text across all files in the current addon. Returns matching files, line numbers, enclosing function definitions/bodies, and context snippets.",
+              parameters: {
+                type: "object",
+                properties: {
+                  query: {
+                    type: "string",
+                    description: "The phrase, function name, hook, variable, or error text to search for (case-insensitive)"
+                  }
+                },
+                required: ["query"]
               }
             },
             {
@@ -389,6 +558,16 @@ app.post("/ticket_event", async (req, res) => {
               "type": "text",
               "text": `Function response for ${value.name}:
                 ${readAddonFile(addonId, filePath)}
+              `
+            })
+          } else if (value.type === "function_call" && value.name === "search_addon_code") {
+            const query = value.arguments?.query;
+            const searchResults = searchAddonFiles(addonId, query);
+
+            inputParts.push({
+              "type": "text",
+              "text": `Function response for ${value.name}:
+                ${JSON.stringify(searchResults, null, 2)}
               `
             })
           } else if (value.type === "function_call" && value.name === "escalate_to_human") {
