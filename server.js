@@ -308,6 +308,11 @@ app.post("/ticket_event", async (req, res) => {
             3. If it is a "Nexus Library" issue that is out of your scope.
             4. Any issues out of your AI scope you must respond to the user and state you are transfering them to human help.
             5. Do not be scared to request human help, if a user requests it give them it.
+            6. If you are escalating to a human call the escalate function and provide a reason.
+            7. If you can resolve the users issue yourself, DO IT. This may include using the tool get_file_contents.
+            8. If you believe the user is doing a custom edit converse with them to figure out the issue and help them.
+            9. You may go off scope if it includes the addon e.g. custom edits.
+            10. You may ask the user for screenshots.
 
             The files you have access to:
             ${getAddonFileList(addonId).join("\n")}
@@ -320,8 +325,7 @@ app.post("/ticket_event", async (req, res) => {
             5. If you need to request more information from the user do so politely and accordingly.
             6. Your messages may be in markdown text.
             7. Your messages must be under 1000 characters.
-            8. Refrain from telling users to open or check files. If you want to state to the user "if you check file x you will see this is the issue" instead, tell the user you are exculating to human help as you have found a genuine addon error.
-            9. If you are escalating to a human call the escalate function and provide a reason.
+            8. Refrain from telling users to open or check files. If you want to state to the user "if you check file x you will see this is the issue" instead summarize the issue to them.
           `,
           tools: [
             {
