@@ -134,6 +134,50 @@ function getAddonFileList(addonName) {
     });
 }
 
+function normalizeSearchQuery(rawQuery) {
+  if (!rawQuery || typeof rawQuery !== "string") return [];
+
+  const candidates = [];
+  const trimmed = rawQuery.trim();
+
+  // Nexus . Inventory : GetStats (ent, quickFormat)" -> "Nexus.Inventory:GetStats"
+  const funcMatch = trimmed.match(/(?:local\s+)?function\s+([a-zA-Z0-9_\s.:]+?)(?:\s*\(|$)/i);
+  if (funcMatch) {
+    const cleanedFuncName = funcMatch[1].replace(/\s*([.:])\s*/g, "$1").trim();
+    if (cleanedFuncName.length >= 2) {
+      candidates.push(cleanedFuncName);
+
+      const parts = cleanedFuncName.split(/[.:]/);
+      const leafName = parts[parts.length - 1];
+      if (leafName && leafName.length >= 2 && leafName !== cleanedFuncName) {
+        candidates.push(leafName);
+      }
+    }
+  }
+
+  // "Nexus . Inventory : GetStats" -> "Nexus.Inventory:GetStats"
+  const collapsedSpaces = trimmed
+    .replace(/\s*([.:])\s*/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // "GetStats(ent, quickFormat)" -> "GetStats"
+  const strippedArgs = collapsedSpaces.replace(/\s*\(.*?\)/g, "").trim();
+  if (strippedArgs.length >= 2 && !candidates.includes(strippedArgs)) {
+    candidates.push(strippedArgs);
+  }
+
+  if (collapsedSpaces.length >= 2 && !candidates.includes(collapsedSpaces)) {
+    candidates.push(collapsedSpaces);
+  }
+
+  if (!candidates.includes(trimmed)) {
+    candidates.push(trimmed);
+  }
+
+  return candidates;
+}
+
 function isOriginDefinition(trimmedLine, cleanQuery) {
   const escaped = cleanQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -174,8 +218,8 @@ function extractFunctionBody(lines, startIdx, maxLines = 60) {
   return extracted.join("\n");
 }
 
-function searchAddonFiles(addonName, query, maxResults = 10) {
-  if (!query || typeof query !== "string" || query.trim().length < 2) {
+function searchAddonFiles(addonName, rawQuery, maxResults = 10) {
+  if (!rawQuery || typeof rawQuery !== "string" || rawQuery.trim().length < 2) {
     return { error: "Search query must be at least 2 characters long." };
   }
 
@@ -184,107 +228,119 @@ function searchAddonFiles(addonName, query, maxResults = 10) {
     return { error: `Addon directory '${addonName}' does not exist.` };
   }
 
+  const candidates = normalizeSearchQuery(rawQuery);
   const files = getAddonFileList(addonName);
-  const cleanQuery = query.trim().toLowerCase();
 
-  const definitions = [];
-  const references = [];
+  // Try each normalized query until we find matches
+  for (const candidate of candidates) {
+    const cleanQuery = candidate.toLowerCase();
+    const definitions = [];
+    const references = [];
 
-  for (const relPath of files) {
-    const ext = path.extname(relPath).toLowerCase();
-    if (ext && ![".lua", ".txt", ".json"].includes(ext)) {
-      continue;
-    }
-
-    const fullPath = path.resolve(baseDir, relPath);
-    if (!fullPath.startsWith(baseDir)) continue;
-
-    let content;
-    try {
-      const stats = fs.statSync(fullPath);
-      if (stats.size > 1024 * 1024) continue; // Skip files > 1MB
-
-      content = fs.readFileSync(fullPath, "utf8");
-    } catch {
-      continue;
-    }
-
-    if (!content.toLowerCase().includes(cleanQuery)) {
-      continue;
-    }
-
-    const lines = content.split(/\r?\n/);
-    let refsInFile = 0;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (!line.toLowerCase().includes(cleanQuery)) continue;
-
-      const trimmedLine = line.trim();
-      const isDef = isOriginDefinition(trimmedLine, cleanQuery);
-
-      if (isDef) {
-        const funcCode = extractFunctionBody(lines, i, 60);
-
-        definitions.push({
-          file: relPath,
-          line_number: i + 1,
-          is_definition: true,
-          definition_header: trimmedLine,
-          function_code: funcCode,
-        });
-      } else {
-        // Reference or match inside other code
-        if (refsInFile >= 2) continue;
-        refsInFile++;
-
-        let enclosingHeader = null;
-        let funcStartIdx = -1;
-
-        // Search backwards up to 60 lines for enclosing function
-        for (let j = i; j >= Math.max(0, i - 60); j--) {
-          const prevLine = lines[j].trim();
-          const isFunc =
-            prevLine.match(/^(?:local\s+)?function\s+([a-zA-Z0-9_.:]+)\s*\(.*?\)/) ||
-            prevLine.match(/^(?:local\s+)?([a-zA-Z0-9_.:]+)\s*=\s*function\s*\(.*?\)/) ||
-            prevLine.match(/^(?:hook\.Add|net\.Receive|concommand\.Add|timer\.Create)\s*\(\s*(["'][^"']+["']|[a-zA-Z0-9_.:]+)/);
-
-          if (isFunc) {
-            enclosingHeader = prevLine;
-            funcStartIdx = j;
-            break;
-          }
-        }
-
-        let functionCode = null;
-        if (funcStartIdx !== -1) {
-          functionCode = extractFunctionBody(lines, funcStartIdx, 45);
-        }
-
-        const startCtx = Math.max(0, i - 2);
-        const endCtx = Math.min(lines.length - 1, i + 2);
-        const snippet = lines.slice(startCtx, endCtx + 1).map((l, idx) => `${startCtx + idx + 1}: ${l}`).join("\n");
-
-        references.push({
-          file: relPath,
-          line_number: i + 1,
-          is_definition: false,
-          enclosing_scope: enclosingHeader || "Global / File Scope",
-          function_code: functionCode || undefined,
-          context_snippet: !functionCode ? snippet : undefined,
-        });
+    for (const relPath of files) {
+      const ext = path.extname(relPath).toLowerCase();
+      if (ext && ![".lua", ".txt", ".json"].includes(ext)) {
+        continue;
       }
+
+      const fullPath = path.resolve(baseDir, relPath);
+      if (!fullPath.startsWith(baseDir)) continue;
+
+      let content;
+      try {
+        const stats = fs.statSync(fullPath);
+        if (stats.size > 1024 * 1024) continue; // Skip files > 1MB
+
+        content = fs.readFileSync(fullPath, "utf8");
+      } catch {
+        continue;
+      }
+
+      if (!content.toLowerCase().includes(cleanQuery)) {
+        continue;
+      }
+
+      const lines = content.split(/\r?\n/);
+      let refsInFile = 0;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line.toLowerCase().includes(cleanQuery)) continue;
+
+        const trimmedLine = line.trim();
+        const isDef = isOriginDefinition(trimmedLine, cleanQuery);
+
+        if (isDef) {
+          const funcCode = extractFunctionBody(lines, i, 60);
+
+          definitions.push({
+            file: relPath,
+            line_number: i + 1,
+            is_definition: true,
+            definition_header: trimmedLine,
+            function_code: funcCode,
+          });
+        } else {
+          if (refsInFile >= 2) continue;
+          refsInFile++;
+
+          let enclosingHeader = null;
+          let funcStartIdx = -1;
+
+          // Search backwards up to 60 lines for enclosing function
+          for (let j = i; j >= Math.max(0, i - 60); j--) {
+            const prevLine = lines[j].trim();
+            const isFunc =
+              prevLine.match(/^(?:local\s+)?function\s+([a-zA-Z0-9_.:]+)\s*\(.*?\)/) ||
+              prevLine.match(/^(?:local\s+)?([a-zA-Z0-9_.:]+)\s*=\s*function\s*\(.*?\)/) ||
+              prevLine.match(/^(?:hook\.Add|net\.Receive|concommand\.Add|timer\.Create)\s*\(\s*(["'][^"']+["']|[a-zA-Z0-9_.:]+)/);
+
+            if (isFunc) {
+              enclosingHeader = prevLine;
+              funcStartIdx = j;
+              break;
+            }
+          }
+
+          let functionCode = null;
+          if (funcStartIdx !== -1) {
+            functionCode = extractFunctionBody(lines, funcStartIdx, 45);
+          }
+
+          const startCtx = Math.max(0, i - 2);
+          const endCtx = Math.min(lines.length - 1, i + 2);
+          const snippet = lines.slice(startCtx, endCtx + 1).map((l, idx) => `${startCtx + idx + 1}: ${l}`).join("\n");
+
+          references.push({
+            file: relPath,
+            line_number: i + 1,
+            is_definition: false,
+            enclosing_scope: enclosingHeader || "Global / File Scope",
+            function_code: functionCode || undefined,
+            context_snippet: !functionCode ? snippet : undefined,
+          });
+        }
+      }
+    }
+
+    const combined = [...definitions, ...references].slice(0, maxResults);
+
+    if (combined.length > 0) {
+      return {
+        query: rawQuery,
+        matched_term: candidate,
+        total_definitions: definitions.length,
+        total_matches: combined.length,
+        results: combined,
+      };
     }
   }
 
-  // definitions first then references
-  const combined = [...definitions, ...references].slice(0, maxResults);
-
   return {
-    query,
-    total_definitions: definitions.length,
-    total_matches: combined.length,
-    results: combined.length > 0 ? combined : "No matches found.",
+    query: rawQuery,
+    total_definitions: 0,
+    total_matches: 0,
+    results: "No matches found.",
   };
 }
 
@@ -480,6 +536,7 @@ app.post("/ticket_event", async (req, res) => {
             6. Your messages may be in quill.
             7. Your messages must be under 1000 characters.
             8. Refrain from telling users to open or check files. If you want to state to the user "if you check file x you will see this is the issue" instead summarize the issue to them.
+            9. Never state to the user that your internal tools, functions, or searches failed or encountered an error. If code or files are not found, respond naturally without mentioning internal tools.
           `,
           tools: [
             {
@@ -518,8 +575,13 @@ app.post("/ticket_event", async (req, res) => {
               description: "Escalate the ticket to human support.",
               parameters: {
                 type: "object",
-                properties: {},
-                required: [],
+                properties: {
+                  reason: {
+                    type: "string",
+                    description: "The specific reason why the ticket is being escalated to a human"
+                  }
+                },
+                required: ["reason"],
               }
             },
           ]
@@ -552,7 +614,8 @@ app.post("/ticket_event", async (req, res) => {
 
         for (const value of cur_interaction.steps) {
           if (value.type === "function_call" && value.name === "get_file_contents") {
-            const filePath = value.arguments?.filepath
+            const filePath = value.arguments?.filepath;
+            console.log(`[${ticketId} : ${messageId}] Tool call get_file_contents: "${filePath}"`);
 
             inputParts.push({
               "type": "text",
@@ -561,8 +624,11 @@ app.post("/ticket_event", async (req, res) => {
               `
             })
           } else if (value.type === "function_call" && value.name === "search_addon_code") {
-            const query = value.arguments?.query;
+            const query = value.arguments?.query || value.arguments?.phrase || value.arguments?.search || value.arguments?.keyword;
+            console.log(`[${ticketId} : ${messageId}] Tool call search_addon_code: "${query}"`);
+
             const searchResults = searchAddonFiles(addonId, query);
+            console.log(`[${ticketId} : ${messageId}] Search found ${searchResults.total_matches || 0} matches (matched term: "${searchResults.matched_term || query}")`);
 
             inputParts.push({
               "type": "text",
@@ -571,12 +637,15 @@ app.post("/ticket_event", async (req, res) => {
               `
             })
           } else if (value.type === "function_call" && value.name === "escalate_to_human") {
+            const reason = value.arguments?.reason || "No reason provided";
+            console.log(`[${ticketId} : ${messageId}] Bot escalated to human. Reason: ${reason}`);
+
             try {
               await redis.set(`HasEscalatedToHuman:${ticketId}`, "1", { EX: 60 * 60 * 24 * 14 })
 
               inputParts.push({
                 "type": "text",
-                "text": "Successfully internally escalated to a human"
+                "text": `Successfully internally escalated to a human. Reason recorded: ${reason}`
               })
             } catch (err) {
               console.error(`[${ticketId} : ${messageId}] Failed to escalate to human.`, err);
