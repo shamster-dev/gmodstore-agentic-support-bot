@@ -1,6 +1,8 @@
 An autonomous Agentic Support bot for Gmodstore tickets. It uses a Redis, NodeJS & Gemini AI tech stack to receive, process and output ticket responses. Files outside the users addon are not exposed to the client. System instructions ensure the AI bot stays on track. Users can request to escalate the ticket to human response at any time.
 **Note** The system is multi model it can read and analyse users attachments!!
 
+Using Gemini 3.5 Flash this is an relatively cheap performance and satisfaction boost for your clients. 
+
 ## How it works:
 ```
 User Creates Ticket Message
@@ -14,6 +16,9 @@ The AI continues to call tools until its complete
 |
 The response is sent back to Gmodstore
 ```
+
+## Rate limiting
+To avoid users burning tokens with a rouge AI hallucinations one ticket can contain 10 messages before the user is automatically handed to a human support agent.
 
 ## Env
 ```
